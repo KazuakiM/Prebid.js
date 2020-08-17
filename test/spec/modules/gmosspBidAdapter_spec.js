@@ -3,7 +3,7 @@ import { spec } from 'modules/gmosspBidAdapter.js';
 import { newBidder } from 'src/adapters/bidderFactory.js';
 import * as utils from 'src/utils.js';
 
-const ENDPOINT = 'https://sp.gmossp-sp.jp/hb/prebid/query.ad';
+const ENDPOINT = 'https://mabuchi-ad.devel.sp.gmossp-sp.jp/hb/prebid/query.ad';
 
 describe('GmosspAdapter', function () {
   const adapter = newBidder(spec);
@@ -64,8 +64,12 @@ describe('GmosspAdapter', function () {
       const requests = spec.buildRequests(bidRequests, bidderRequest);
       expect(requests[0].url).to.equal(ENDPOINT);
       expect(requests[0].method).to.equal('GET');
-      expect(requests[0].data).to.equal('tid=791e9d84-af92-4903-94da-24c7426d9d0c&bid=2b84475b5b636e&ver=$prebid.version$&sid=123456&url=https%3A%2F%2Fhoge.com&cur=JPY&dnt=0&');
+      expect(requests[0].data).to.equal('tid=791e9d84-af92-4903-94da-24c7426d9d0c&bid=2b84475b5b636e&ver=$prebid.version$&sid=123456&url=https%3A%2F%2Fhoge.com&cur=JPY&dnt=0&usr=&');
     });
+
+    // it('Support identityLink', function () {
+    //  //FIME: テスト保留
+    // });
   });
 
   describe('interpretResponse', function () {
@@ -116,6 +120,7 @@ describe('GmosspAdapter', function () {
           height: 250,
           ad: '<div class="gmossp"></div>',
           creativeId: '985ec572b32be309.76973017',
+          mediaType: 'banner',
           netRevenue: true,
           ttl: 300
         }

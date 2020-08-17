@@ -1,14 +1,14 @@
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import * as utils from '../src/utils.js';
 import { config } from '../src/config.js';
-import { BANNER } from '../src/mediaTypes.js';
+import { BANNER, NATIVE } from '../src/mediaTypes.js';
 
 const BIDDER_CODE = 'gmossp';
-const ENDPOINT = 'https://sp.gmossp-sp.jp/hb/prebid/query.ad';
+const ENDPOINT = 'https://mabuchi-ad.devel.sp.gmossp-sp.jp/hb/prebid/query.ad';
 
 export const spec = {
   code: BIDDER_CODE,
-  supportedMediaTypes: [BANNER],
+  supportedMediaTypes: [BANNER, NATIVE],
 
   /**
    * Determines whether or not the given bid request is valid.
@@ -41,6 +41,12 @@ export const spec = {
       const bid = request.bidId;
       const ver = '$prebid.version$';
       const sid = utils.getBidIdParameter('sid', request.params);
+      const native = utils.getBidIdParameter('native', request.params);
+
+      let eids = [];
+      if (bidderRequest && bidderRequest.userId) {
+        setUserId(eids, 'liveramp.com', utils.deepAccess(bidderRequest, `userId.idl_env`));
+      }
 
       queryString = utils.tryAppendQueryString(queryString, 'tid', tid);
       queryString = utils.tryAppendQueryString(queryString, 'bid', bid);
@@ -49,6 +55,8 @@ export const spec = {
       queryString = utils.tryAppendQueryString(queryString, 'url', url);
       queryString = utils.tryAppendQueryString(queryString, 'cur', cur);
       queryString = utils.tryAppendQueryString(queryString, 'dnt', dnt);
+      queryString = utils.tryAppendQueryString(queryString, 'native', native);
+      queryString = utils.tryAppendQueryString(queryString, 'usr', eids);
 
       bidRequests.push({
         method: 'GET',
@@ -72,26 +80,26 @@ export const spec = {
       return [];
     }
 
-    try {
-      res.imps.forEach(impTracker => {
-        const tracker = utils.createTrackPixelHtml(impTracker);
-        res.ad += tracker;
-      });
-    } catch (error) {
-      utils.logError('Error appending tracking pixel', error);
-    }
-
     const bid = {
       requestId: res.bid,
       cpm: res.price,
       currency: res.cur,
       width: res.w,
       height: res.h,
-      ad: res.ad,
       creativeId: res.creativeId,
       netRevenue: true,
       ttl: res.ttl || 300
     };
+
+    if (res.native && res.native.length > 0) {
+      // native
+      bid.mediaType = NATIVE;
+      bid.native = getNativeAd(res.native);
+    } else {
+      // banner
+      bid.mediaType = BANNER;
+      bid.ad = getBannerAd(res);
+    }
 
     return [bid];
   },
@@ -129,6 +137,76 @@ function getCurrencyType() {
     return config.getConfig('currency.adServerCurrency');
   }
   return 'JPY';
+}
+
+function setUserId(eids, source, value) {
+  if (utils.isStr(value)) {
+    eids.push({
+      source: source,
+      uids: [{
+        id: value
+      }]
+    });
+  }
+}
+
+function getBannerAd(res) {
+  try {
+    res.imps.forEach(impTracker => {
+      const tracker = utils.createTrackPixelHtml(impTracker);
+      res.ad += tracker;
+    });
+  } catch (error) {
+    utils.logError('Error appending tracking pixel', error);
+  }
+
+  return res.ad
+}
+
+function getNativeAd(resNative) {
+  if (!resNative.assets.length) {
+    return {};
+  }
+
+  let native = {};
+  resNative.assets.forEach(asset => {
+    switch (asset.id) {
+      case 0:
+        native.title = asset.title.text;
+        break;
+
+      case 1:
+        native.body = asset.data.value;
+        break;
+
+      case 2:
+        native.sponsoredBy = asset.data.value;
+        break;
+
+      case 3:
+        native.icon = {
+          url: asset.img.url,
+          width: asset.img.w,
+          height: asset.img.h,
+        };
+        break;
+
+      case 4:
+        native.image = {
+          url: asset.img.url,
+          width: asset.img.w,
+          height: asset.img.h,
+        };
+        break;
+    }
+  });
+
+  native.clickUrl = resNative.link.url;
+  native.impressionTrackers = resNative.imptrackers || [];
+  native.privacyLink = resNative.privacy || '';
+  native.privacyIcon = resNative.privacyIcon || '';
+
+  return native;
 }
 
 registerBidder(spec);
