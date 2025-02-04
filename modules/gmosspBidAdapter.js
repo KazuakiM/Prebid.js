@@ -1,15 +1,15 @@
 import { getCurrencyFromBidderRequest } from '../libraries/ortb2Utils/currency.js';
-import { tryAppendQueryString } from '../libraries/urlUtils/urlUtils.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { BANNER } from '../src/mediaTypes.js';
 import {
   createTrackPixelHtml,
-  deepAccess,
-  deepSetValue, getBidIdParameter,
+  getBidIdParameter,
   getDNT,
   getWindowTop,
   isEmpty,
-  logError
+  logError,
+  setOnAny,
+  _each
 } from '../src/utils.js';
 
 /**
@@ -47,85 +47,72 @@ export const spec = {
    * @return ServerRequest Info describing the request to the server.
    */
   buildRequests: function (validBidRequests, bidderRequest) {
-    const bidRequests = [];
-
-    const urlInfo = getUrlInfo(bidderRequest.refererInfo);
-    const cur = getCurrencyType(bidderRequest);
-    const dnt = getDNT() ? '1' : '0';
-
-    for (let i = 0; i < validBidRequests.length; i++) {
-      let queryString = '';
-
-      const request = validBidRequests[i];
-      const tid = request.ortb2Imp?.ext?.tid;
-      const bid = request.bidId;
-      const imuid = deepAccess(request, 'userId.imuid');
-      const sharedId = deepAccess(request, 'userId.pubcid');
-      const idlEnv = deepAccess(request, 'userId.idl_env');
-      const ver = '$prebid.version$';
-      const sid = getBidIdParameter('sid', request.params);
-
-      queryString = tryAppendQueryString(queryString, 'tid', tid);
-      queryString = tryAppendQueryString(queryString, 'bid', bid);
-      queryString = tryAppendQueryString(queryString, 'ver', ver);
-      queryString = tryAppendQueryString(queryString, 'sid', sid);
-      queryString = tryAppendQueryString(queryString, 'im_uid', imuid);
-      queryString = tryAppendQueryString(queryString, 'shared_id', sharedId);
-      queryString = tryAppendQueryString(queryString, 'idl_env', idlEnv);
-      queryString = tryAppendQueryString(queryString, 'url', urlInfo.url);
-      queryString = tryAppendQueryString(queryString, 'meta_url', urlInfo.canonicalLink);
-      queryString = tryAppendQueryString(queryString, 'ref', urlInfo.ref);
-      queryString = tryAppendQueryString(queryString, 'cur', cur);
-      queryString = tryAppendQueryString(queryString, 'dnt', dnt);
-
-      bidRequests.push({
-        method: 'GET',
-        url: ENDPOINT,
-        data: queryString
+    const requests = [];
+    _each(validBidRequests, function(request) {
+      requests.push({
+        bid: request.bidId,
+        sid: getBidIdParameter('sid', request.params),
       });
-    }
-    return bidRequests;
+    });
+
+    return [{
+      method: 'POST',
+      url: ENDPOINT,
+      data: JSON.stringify({
+        ver: '$prebid.version$',
+        eids: {
+          im_uid: setOnAny(validBidRequests, 'userId.imuid'),
+          shared_id: setOnAny(validBidRequests, 'userId.pubcid'),
+        },
+        url_info: getUrlInfo(bidderRequest.refererInfo),
+        cur: getCurrencyType(bidderRequest),
+        dnt: getDNT() ? 1 : 0,
+        device_sua: setOnAny(validBidRequests, 'ortb2.device.sua'),
+        user_data: setOnAny(validBidRequests, 'ortb2.user.data'),
+        requests: requests,
+      }),
+    }];
   },
 
   /**
    * Unpack the response from the server into a list of bids.
    *
-   * @param {*} serverResponse A successful response from the server.
+   * @param {*} serverResponses A successful response from the server.
+   * @param {*} request
    * @return {Bid[]} An array of bids which were nested inside the server.
    */
-  interpretResponse: function (bidderResponse, requests) {
-    const res = bidderResponse.body;
+  interpretResponse: function (serverResponses, request) {
+    const res = serverResponses.body;
 
     if (isEmpty(res)) {
       return [];
     }
 
-    try {
-      res.imps.forEach(impTracker => {
-        const tracker = createTrackPixelHtml(impTracker);
-        res.ad += tracker;
+    const bids = [];
+    _each(res.bids, function(row) {
+      let ad = row.ad;
+      try {
+        _each(row.imps, function(impTracker) {
+          ad += createTrackPixelHtml(impTracker);
+        });
+      } catch (error) {
+        logError('Error appending tracking pixel', error);
+      }
+
+      bids.push({
+        requestId: row.bid,
+        cpm: row.price,
+        currency: res.cur,
+        width: row.w,
+        height: row.h,
+        ad: ad,
+        creativeId: row.creativeId,
+        netRevenue: true,
+        ttl: res.ttl || 300,
+        adomains: row.adomains,
       });
-    } catch (error) {
-      logError('Error appending tracking pixel', error);
-    }
-
-    const bid = {
-      requestId: res.bid,
-      cpm: res.price,
-      currency: res.cur,
-      width: res.w,
-      height: res.h,
-      ad: res.ad,
-      creativeId: res.creativeId,
-      netRevenue: true,
-      ttl: res.ttl || 300
-    };
-
-    if (res.adomains) {
-      deepSetValue(bid, 'meta.advertiserDomains', Array.isArray(res.adomains) ? res.adomains : [res.adomains]);
-    }
-
-    return [bid];
+    });
+    return bids;
   },
 
   /**
@@ -141,9 +128,9 @@ export const spec = {
       return syncs;
     }
 
-    serverResponses.forEach(res => {
+    _each(serverResponses, function(res) {
       if (syncOptions.pixelEnabled && res.body && res.body.syncs.length) {
-        res.body.syncs.forEach(sync => {
+        _each(res.body.syncs, function(sync) {
           syncs.push({
             type: 'image',
             url: sync
@@ -173,7 +160,7 @@ function getUrlInfo(refererInfo) {
   }
 
   return {
-    canonicalLink: canonicalLink,
+    canonical_link: canonicalLink,
     // TODO: are these the right refererInfo values?
     url: refererInfo.topmostLocation,
     ref: refererInfo.ref || window.document.referrer,
